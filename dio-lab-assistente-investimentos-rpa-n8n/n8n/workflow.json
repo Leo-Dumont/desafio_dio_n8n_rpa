@@ -1,0 +1,253 @@
+{
+  "name": "Assistente de Investimentos com RPA e IA Generativa - DIO.me",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clientes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook - Receber Clientes (RPA)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        160,
+        340
+      ],
+      "webhookId": "clientes-investimentos"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {}
+      },
+      "id": "2",
+      "name": "Obter Base de Investimentos (CSV)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        380,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// 1. Obter texto do CSV de Investimentos\nlet csvText = '';\nif (typeof $input.first().json.data === 'string') {\n  csvText = $input.first().json.data;\n} else if (typeof $input.first().json === 'string') {\n  csvText = $input.first().json;\n} else {\n  csvText = JSON.stringify($input.first().json);\n}\n\n// Fallback de catálogo se a requisição externa falhar\nif (!csvText || !csvText.includes('perfil')) {\n  csvText = `perfil,produto,minimo,rentabilidade\nConservador,Poupança,100,6.2%\nConservador,CDB Liquidez Diária,1000,12.5%\nConservador,Tesouro Selic,500,13.0%\nModerado,CDB Prefixado,1000,14.0%\nModerado,Fundo Multimercado,5000,16.0%\nModerado,Tesouro IPCA+,1000,IPCA+6.0%\nArrojado,Ações ETF,500,Variável\nArrojado,Fundo de Ações,10000,Variável\nArrojado,Criptomoedas,100,Variável`;\n}\n\n// 2. Parser do CSV\nconst linhasCsv = csvText.trim().split(/\\r?\\n/);\nconst catalogo = [];\nfor (let i = 1; i < linhasCsv.length; i++) {\n  const col = linhasCsv[i].split(',').map(s => s.trim());\n  if (col.length >= 4) {\n    catalogo.push({\n      perfil: col[0],\n      produto: col[1],\n      minimo: parseFloat(col[2]) || 0,\n      rentabilidade: col[3]\n    });\n  }\n}\n\n// 3. Obter os dados enviados pelo RPA ao Webhook\nconst webhookData = $('Webhook - Receber Clientes (RPA)').first().json;\nconst webhookBody = webhookData.body || webhookData;\nconst clientes = Array.isArray(webhookBody) ? webhookBody : (webhookBody.clientes || [webhookBody]);\n\n// Parâmetro opcional: se o cliente enviar 'usar_ia': true no JSON, roteia para o Agente de IA\nconst usarIaGlobal = webhookBody.usar_ia === true || webhookData.query?.ia === 'true';\n\nfunction converterSaldo(valor) {\n  if (typeof valor === 'number') return valor;\n  const limpo = String(valor || '0').replace(/[^0-9,-]/g, '').replace(',', '.');\n  return parseFloat(limpo) || 0;\n}\n\nconst itensProcessados = [];\n\n// 4. Cruzamento de cada cliente com a base de investimentos\nfor (const cliente of clientes) {\n  if (!cliente || !cliente.nome) continue;\n\n  const perfil = (cliente.perfil || 'Conservador').trim();\n  const saldoNum = converterSaldo(cliente.saldo);\n\n  const produtosPerfil = catalogo.filter(p => p.perfil.toLowerCase() === perfil.toLowerCase());\n  const produtosAcessiveis = produtosPerfil.filter(p => saldoNum >= p.minimo);\n\n  const produtoPrincipal = produtosAcessiveis.length > 0\n    ? produtosAcessiveis[produtosAcessiveis.length - 1]\n    : (produtosPerfil[0] || { produto: 'Tesouro Selic', rentabilidade: '13.0%', minimo: 500 });\n\n  const outrosProdutos = produtosAcessiveis\n    .filter(p => p.produto !== produtoPrincipal.produto)\n    .map(p => p.produto);\n\n  // Template Estático Padrão (Garante funcionamento MVP sem depender de API externa)\n  let templateEstatico = '';\n  if (perfil.toLowerCase() === 'conservador') {\n    templateEstatico = `Olá, ${cliente.nome}! 🛡️ Com perfil Conservador e saldo de ${cliente.saldo}, sua prioridade é segurança e liquidez. Recomendamos ${produtoPrincipal.produto} com rentabilidade de ${produtoPrincipal.rentabilidade} (mínimo R$ ${produtoPrincipal.minimo}). ${outrosProdutos.length > 0 ? 'Outras opções seguras: ' + outrosProdutos.join(', ') + '.' : ''}`;\n  } else if (perfil.toLowerCase() === 'moderado') {\n    templateEstatico = `Olá, ${cliente.nome}! ⚖️ Com perfil Moderado e saldo de ${cliente.saldo}, recomendamos ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade}) para equilibrar segurança de renda fixa com valorização. ${outrosProdutos.length > 0 ? 'Opções complementares: ' + outrosProdutos.join(', ') + '.' : ''}`;\n  } else if (perfil.toLowerCase() === 'arrojado') {\n    templateEstatico = `Olá, ${cliente.nome}! 🚀 Como investidor Arrojado com saldo de ${cliente.saldo}, você tem foco em alto potencial de retorno. Sugerimos ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade}, mínimo R$ ${produtoPrincipal.minimo}). ${outrosProdutos.length > 0 ? 'Alternativas para diversificar: ' + outrosProdutos.join(', ') + '.' : ''}`;\n  } else {\n    templateEstatico = `Olá, ${cliente.nome}! Recomendamos ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade}).`;\n  }\n\n  // Prompt estruturado caso o fluxo de IA seja acionado\n  const promptIa = `Você é um Consultor Financeiro de Investimentos sênior da DIO Invest.\\nCrie uma mensagem acolhedora, personalizada e persuasiva para o cliente:\\n- Nome: ${cliente.nome}\\n- Perfil: ${perfil}\\n- Saldo Disponível: ${cliente.saldo}\\n- Recomendação Principal: ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade}, aporte mínimo R$ ${produtoPrincipal.minimo})\\n- Opções complementares: ${outrosProdutos.join(', ') || 'Nenhuma'}\\n\\nRegras:\\n1. Destaque por que a opção se alinha ao perfil ${perfil}.\\n2. Tom amigável, humanizado e focado em educação financeira.\\n3. Máximo de 2 parágrafos curtos com emojis adequados.`;\n\n  itensProcessados.push({\n    json: {\n      nome: cliente.nome,\n      email: cliente.email,\n      saldo: cliente.saldo,\n      saldo_numerico: saldoNum,\n      perfil: perfil,\n      produto_recomendado: produtoPrincipal.produto,\n      rentabilidade: produtoPrincipal.rentabilidade,\n      minimo_exigido: produtoPrincipal.minimo,\n      outras_opcoes: outrosProdutos,\n      mensagem_estatica: templateEstatico,\n      prompt_ia: promptIa,\n      usar_ia: usarIaGlobal,\n      tipo_mensagem: usarIaGlobal ? 'Aguardando IA' : 'Template Estático (MVP)',\n      data_processamento: new Date().toISOString()\n    }\n  });\n}\n\nreturn itensProcessados;"
+      },
+      "id": "3",
+      "name": "Cruzar Dados (Clientes x Investimentos)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        600,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.usar_ia }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "4",
+      "name": "Roteador (Usar IA Generativa?)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        820,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt_ia }}"
+      },
+      "id": "5",
+      "name": "Agente de IA - Consultor de Investimentos",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        1060,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-1.5-flash",
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "6",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        420
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "GOOGLE_GEMINI_CREDENTIAL_ID",
+          "name": "Conta Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Mescla o resultado gerado pela IA com as informações originais\nconst resultados = [];\nfor (let i = 0; i < $items().length; i++) {\n  const original = $('Cruzar Dados (Clientes x Investimentos)').all()[i].json;\n  const textoIa = $items()[i].json.text || $items()[i].json.response || $items()[i].json;\n\n  resultados.push({\n    json: {\n      nome: original.nome,\n      email: original.email,\n      saldo: original.saldo,\n      perfil: original.perfil,\n      produto_recomendado: original.produto_recomendado,\n      rentabilidade: original.rentabilidade,\n      mensagem_final: typeof textoIa === 'string' ? textoIa : JSON.stringify(textoIa),\n      tipo_mensagem: \"IA Generativa (Google Gemini)\",\n      data_processamento: original.data_processamento\n    }\n  });\n}\nreturn resultados;"
+      },
+      "id": "7",
+      "name": "Formatar Resposta IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Define a mensagem final como o template estático do MVP\nreturn $items().map(item => ({\n  json: {\n    nome: item.json.nome,\n    email: item.json.email,\n    saldo: item.json.saldo,\n    perfil: item.json.perfil,\n    produto_recomendado: item.json.produto_recomendado,\n    rentabilidade: item.json.rentabilidade,\n    outras_opcoes: item.json.outras_opcoes,\n    mensagem_final: item.json.mensagem_estatica,\n    tipo_mensagem: \"Template Estático (MVP)\",\n    data_processamento: item.json.data_processamento\n  }\n}));"
+      },
+      "id": "8",
+      "name": "Formatar Resposta Estática (MVP)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"sucesso\",\n  \"mensagem\": \"Recomendações de investimentos geradas com sucesso!\",\n  \"total_clientes_processados\": $items().length,\n  \"clientes\": $items().map(item => item.json)\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "9",
+      "name": "Responder ao Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        340
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Receber Clientes (RPA)": {
+      "main": [
+        [
+          {
+            "node": "Obter Base de Investimentos (CSV)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obter Base de Investimentos (CSV)": {
+      "main": [
+        [
+          {
+            "node": "Cruzar Dados (Clientes x Investimentos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruzar Dados (Clientes x Investimentos)": {
+      "main": [
+        [
+          {
+            "node": "Roteador (Usar IA Generativa?)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roteador (Usar IA Generativa?)": {
+      "main": [
+        [
+          {
+            "node": "Agente de IA - Consultor de Investimentos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Formatar Resposta Estática (MVP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente de IA - Consultor de Investimentos",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente de IA - Consultor de Investimentos": {
+      "main": [
+        [
+          {
+            "node": "Formatar Resposta IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Resposta IA": {
+      "main": [
+        [
+          {
+            "node": "Responder ao Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Resposta Estática (MVP)": {
+      "main": [
+        [
+          {
+            "node": "Responder ao Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

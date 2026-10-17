@@ -1,0 +1,190 @@
+{
+  "name": "Assistente de Investimentos RPA - IA Generativa (Desafio Completo)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clientes-ia",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook - Receber Clientes",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        180,
+        300
+      ],
+      "webhookId": "clientes-investimentos-ia"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {}
+      },
+      "id": "2",
+      "name": "Obter Base de Investimentos (CSV)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// 1. Obter texto do CSV retornado pelo nó HTTP anterior\nlet csvText = '';\nif (typeof $input.first().json.data === 'string') {\n  csvText = $input.first().json.data;\n} else if (typeof $input.first().json === 'string') {\n  csvText = $input.first().json;\n} else {\n  csvText = JSON.stringify($input.first().json);\n}\n\n// Fallback de segurança se o download falhar ou vier vazio\nif (!csvText || !csvText.includes('perfil')) {\n  csvText = `perfil,produto,minimo,rentabilidade\nConservador,Poupança,100,6.2%\nConservador,CDB Liquidez Diária,1000,12.5%\nConservador,Tesouro Selic,500,13.0%\nModerado,CDB Prefixado,1000,14.0%\nModerado,Fundo Multimercado,5000,16.0%\nModerado,Tesouro IPCA+,1000,IPCA+6.0%\nArrojado,Ações ETF,500,Variável\nArrojado,Fundo de Ações,10000,Variável\nArrojado,Criptomoedas,100,Variável`;\n}\n\n// 2. Parser do CSV de Opções de Investimento\nconst linhasCsv = csvText.trim().split(/\\r?\\n/);\nconst catalogo = [];\nfor (let i = 1; i < linhasCsv.length; i++) {\n  const cols = linhasCsv[i].split(',').map(c => c.trim());\n  if (cols.length >= 4) {\n    catalogo.push({\n      perfil: cols[0],\n      produto: cols[1],\n      minimo: parseFloat(cols[2]) || 0,\n      rentabilidade: cols[3]\n    });\n  }\n}\n\n// 3. Obter a lista de clientes enviada ao Webhook\nconst webhookData = $('Webhook - Receber Clientes').first().json;\nconst webhookBody = webhookData.body || webhookData;\nconst clientes = Array.isArray(webhookBody) ? webhookBody : (webhookBody.clientes || [webhookBody]);\n\nfunction converterSaldo(valor) {\n  if (typeof valor === 'number') return valor;\n  const limpo = String(valor || '0').replace(/[^0-9,-]/g, '').replace(',', '.');\n  return parseFloat(limpo) || 0;\n}\n\nconst itemsParaIA = [];\n\n// 4. Cruzar dados e montar prompt customizado para a IA por cliente\nfor (const cliente of clientes) {\n  if (!cliente || !cliente.nome) continue;\n\n  const perfil = (cliente.perfil || 'Conservador').trim();\n  const saldoNumerico = converterSaldo(cliente.saldo);\n\n  const produtosPerfil = catalogo.filter(p => p.perfil.toLowerCase() === perfil.toLowerCase());\n  const produtosCompativeis = produtosPerfil.filter(p => saldoNumerico >= p.minimo);\n  const produtoPrincipal = produtosCompativeis.length > 0\n    ? produtosCompativeis[produtosCompativeis.length - 1]\n    : (produtosPerfil[0] || { produto: 'Tesouro Selic', rentabilidade: '13.0%', minimo: 500 });\n\n  const catalogoResumido = produtosCompativeis.map(p => `${p.produto} (Rentabilidade: ${p.rentabilidade}, Aporte mínimo: R$ ${p.minimo})`).join('; ');\n\n  // Prompt com engenharia de contexto para o modelo LLM\n  const prompt = `Você é um Consultor Financeiro de Investimentos sênior e atencioso.\nCrie uma mensagem de recomendação de investimentos personalizada, clara, persuasiva e humanizada para o cliente com os dados abaixo:\n\n- Nome: ${cliente.nome}\n- Perfil do Investidor: ${perfil}\n- Saldo Disponível para Aplicação: ${cliente.saldo}\n- Produto Principal Recomendado: ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade})\n- Outras opções compatíveis com o perfil e saldo: ${catalogoResumido}\n\nDiretrizes obrigatórias:\n1. Cumprimente o cliente pelo primeiro nome em tom consultivo e amigável.\n2. Justifique a indicação do produto principal com base no perfil (${perfil === 'Conservador' ? 'segurança e liquidez' : perfil === 'Moderado' ? 'equilíbrio e rentabilidade' : 'alto potencial de valorização'}).\n3. Apresente os dados de rentabilidade de forma acessível.\n4. Finalize com um convite cordial para esclarecer dúvidas e iniciar o investimento.\n5. Tamanho máximo: 2 a 3 parágrafos objetivos. Use emojis com moderação.`;\n\n  itemsParaIA.push({\n    json: {\n      nome: cliente.nome,\n      email: cliente.email,\n      saldo: cliente.saldo,\n      saldo_numerico: saldoNumerico,\n      perfil: perfil,\n      recomendacao_principal: produtoPrincipal,\n      produtos_compativeis: produtosCompativeis.map(p => p.produto),\n      prompt_ia: prompt\n    }\n  });\n}\n\nreturn itemsParaIA;"
+      },
+      "id": "3",
+      "name": "Cruzar Dados e Preparar Contexto IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt_ia }}"
+      },
+      "id": "4",
+      "name": "Agente de IA - Consultor de Investimentos",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-1.5-flash",
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "id": "5",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        880,
+        500
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "GOOGLE_GEMINI_CREDENTIAL_ID",
+          "name": "Conta Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Mescla o retorno da IA com os dados originais do cliente\nconst resultados = [];\nfor (let i = 0; i < $items().length; i++) {\n  const itemOriginal = $('Cruzar Dados e Preparar Contexto IA').all()[i].json;\n  const respostaIa = $items()[i].json.text || $items()[i].json.response || $items()[i].json;\n\n  resultados.push({\n    json: {\n      nome: itemOriginal.nome,\n      email: itemOriginal.email,\n      saldo: itemOriginal.saldo,\n      perfil: itemOriginal.perfil,\n      produto_recomendado: itemOriginal.recomendacao_principal.produto,\n      rentabilidade: itemOriginal.recomendacao_principal.rentabilidade,\n      mensagem_personalizada: typeof respostaIa === 'string' ? respostaIa : JSON.stringify(respostaIa),\n      tipo_mensagem: \"Gerada por IA Generativa (Google Gemini)\",\n      data_processamento: new Date().toISOString()\n    }\n  });\n}\n\nreturn resultados;"
+      },
+      "id": "6",
+      "name": "Formatar Saída IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"sucesso\",\n  \"mensagem\": \"Recomendações geradas com sucesso pelo Agente de IA Generativa!\",\n  \"total_clientes\": $items().length,\n  \"clientes\": $items().map(item => item.json)\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "7",
+      "name": "Responder ao Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1380,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Receber Clientes": {
+      "main": [
+        [
+          {
+            "node": "Obter Base de Investimentos (CSV)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obter Base de Investimentos (CSV)": {
+      "main": [
+        [
+          {
+            "node": "Cruzar Dados e Preparar Contexto IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruzar Dados e Preparar Contexto IA": {
+      "main": [
+        [
+          {
+            "node": "Agente de IA - Consultor de Investimentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente de IA - Consultor de Investimentos",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente de IA - Consultor de Investimentos": {
+      "main": [
+        [
+          {
+            "node": "Formatar Saída IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Saída IA": {
+      "main": [
+        [
+          {
+            "node": "Responder ao Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

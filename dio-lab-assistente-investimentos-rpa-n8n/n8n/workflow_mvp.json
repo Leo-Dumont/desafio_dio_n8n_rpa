@@ -1,0 +1,107 @@
+{
+  "name": "Assistente de Investimentos RPA - MVP (Mensagens Estáticas)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clientes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook - Receber Clientes",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "clientes-investimentos"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {}
+      },
+      "id": "2",
+      "name": "Obter Base de Investimentos (CSV)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// 1. Obter texto do CSV retornado pelo nó HTTP anterior\nlet csvText = '';\nif (typeof $input.first().json.data === 'string') {\n  csvText = $input.first().json.data;\n} else if (typeof $input.first().json === 'string') {\n  csvText = $input.first().json;\n} else {\n  csvText = JSON.stringify($input.first().json);\n}\n\n// Fallback de segurança se o download falhar ou vier vazio\nif (!csvText || !csvText.includes('perfil')) {\n  csvText = `perfil,produto,minimo,rentabilidade\nConservador,Poupança,100,6.2%\nConservador,CDB Liquidez Diária,1000,12.5%\nConservador,Tesouro Selic,500,13.0%\nModerado,CDB Prefixado,1000,14.0%\nModerado,Fundo Multimercado,5000,16.0%\nModerado,Tesouro IPCA+,1000,IPCA+6.0%\nArrojado,Ações ETF,500,Variável\nArrojado,Fundo de Ações,10000,Variável\nArrojado,Criptomoedas,100,Variável`;\n}\n\n// 2. Parser do CSV de Opções de Investimento\nconst linhasCsv = csvText.trim().split(/\\r?\\n/);\nconst catalogo = [];\nfor (let i = 1; i < linhasCsv.length; i++) {\n  const cols = linhasCsv[i].split(',').map(c => c.trim());\n  if (cols.length >= 4) {\n    catalogo.push({\n      perfil: cols[0],\n      produto: cols[1],\n      minimo: parseFloat(cols[2]) || 0,\n      rentabilidade: cols[3]\n    });\n  }\n}\n\n// 3. Obter a lista de clientes enviada ao Webhook\nconst webhookData = $('Webhook - Receber Clientes').first().json;\nconst webhookBody = webhookData.body || webhookData;\nconst clientes = Array.isArray(webhookBody) ? webhookBody : (webhookBody.clientes || [webhookBody]);\n\n// Função auxiliar para converter saldo formatado (ex: 'R$ 12.500,00') em número\nfunction converterSaldo(valor) {\n  if (typeof valor === 'number') return valor;\n  const limpo = String(valor || '0')\n    .replace(/[^0-9,-]/g, '')\n    .replace(',', '.');\n  return parseFloat(limpo) || 0;\n}\n\nconst resultados = [];\n\n// 4. Cruzar cada cliente com as opções de investimento e gerar mensagem estática\nfor (const cliente of clientes) {\n  if (!cliente || !cliente.nome) continue;\n\n  const perfil = (cliente.perfil || 'Conservador').trim();\n  const saldoNumerico = converterSaldo(cliente.saldo);\n\n  // Filtrar opções pelo perfil do cliente\n  const produtosPerfil = catalogo.filter(p => p.perfil.toLowerCase() === perfil.toLowerCase());\n\n  // Filtrar opções que cabem no saldo do cliente\n  const produtosCompativeis = produtosPerfil.filter(p => saldoNumerico >= p.minimo);\n\n  // Definir recomendação principal\n  const produtoPrincipal = produtosCompativeis.length > 0\n    ? produtosCompativeis[produtosCompativeis.length - 1]\n    : (produtosPerfil[0] || { produto: 'Tesouro Selic', rentabilidade: '13.0%', minimo: 500 });\n\n  const outrosProdutos = produtosCompativeis\n    .filter(p => p.produto !== produtoPrincipal.produto)\n    .map(p => p.produto);\n\n  // 5. Gerar templates de mensagens conforme o perfil (Etapa 4 do Desafio)\n  let mensagem = '';\n  if (perfil.toLowerCase() === 'conservador') {\n    mensagem = `Olá, ${cliente.nome}! 🛡️ Identificamos que seu perfil é Conservador e seu saldo disponível é de ${cliente.saldo}. Para focar em segurança, liquidez e proteção de capital em renda fixa, recomendamos aplicar em ${produtoPrincipal.produto} com rentabilidade de ${produtoPrincipal.rentabilidade} (mínimo de R$ ${produtoPrincipal.minimo}). ${outrosProdutos.length > 0 ? 'Outras opções seguras acessíveis para você: ' + outrosProdutos.join(', ') + '.' : ''}`;\n  } else if (perfil.toLowerCase() === 'moderado') {\n    mensagem = `Olá, ${cliente.nome}! ⚖️ Seu perfil é Moderado com saldo disponível de ${cliente.saldo}. Para construir um mix equilibrado entre segurança de renda fixa e potencial de valorização, indicamos o ${produtoPrincipal.produto} (rentabilidade estimada em ${produtoPrincipal.rentabilidade}). ${outrosProdutos.length > 0 ? 'Outras alternativas para diversificar: ' + outrosProdutos.join(', ') + '.' : ''}`;\n  } else if (perfil.toLowerCase() === 'arrojado') {\n    mensagem = `Olá, ${cliente.nome}! 🚀 Como investidor Arrojado com saldo disponível de ${cliente.saldo}, você tem foco em maior potencial de retorno e tolerância a risco. Sugerimos alocação em ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade}, mínimo R$ ${produtoPrincipal.minimo}). ${outrosProdutos.length > 0 ? 'Você também pode diversificar com: ' + outrosProdutos.join(', ') + '.' : ''}`;\n  } else {\n    mensagem = `Olá, ${cliente.nome}! Seu saldo é ${cliente.saldo}. Recomendamos ${produtoPrincipal.produto} (${produtoPrincipal.rentabilidade}).`;\n  }\n\n  resultados.push({\n    json: {\n      nome: cliente.nome,\n      email: cliente.email,\n      saldo: cliente.saldo,\n      saldo_numerico: saldoNumerico,\n      perfil: perfil,\n      recomendacao_principal: {\n        produto: produtoPrincipal.produto,\n        rentabilidade: produtoPrincipal.rentabilidade,\n        minimo: produtoPrincipal.minimo\n      },\n      outras_opcoes_compativeis: outrosProdutos,\n      mensagem_personalizada: mensagem,\n      tipo_mensagem: \"Template Estático (MVP)\",\n      data_processamento: new Date().toISOString()\n    }\n  });\n}\n\nreturn resultados;"
+      },
+      "id": "3",
+      "name": "Cruzar Dados e Gerar Mensagens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"sucesso\",\n  \"mensagem\": \"Clientes processados e recomendações de investimentos geradas com sucesso!\",\n  \"total_clientes\": $items().length,\n  \"clientes\": $items().map(item => item.json)\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4",
+      "name": "Responder ao Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Receber Clientes": {
+      "main": [
+        [
+          {
+            "node": "Obter Base de Investimentos (CSV)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obter Base de Investimentos (CSV)": {
+      "main": [
+        [
+          {
+            "node": "Cruzar Dados e Gerar Mensagens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruzar Dados e Gerar Mensagens": {
+      "main": [
+        [
+          {
+            "node": "Responder ao Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
